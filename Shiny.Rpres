@@ -1,0 +1,126 @@
+Shiny App to Tune Parameters for RF
+========================================================
+author: Peng Li 
+date: 12/17/2017
+autosize: true
+font-import: http://fonts.googleapis.com/css?family=Risque
+font-family: 'Risque'
+transition: rotate
+
+Objective of the App
+========================================================
+
+This Shiny App is created to compare the results from tuning Random Forest model with diffrent inout parameters
+
+Some possible input parameters to be tuned are:
+
+- The number of Trees generated
+- The number of radom variables being considered for each split
+- The minimum size of terminal nodes
+
+Introduction
+========================================================
+
+
+In this Shiny App, I am going to use the data from Weight lifting excercise. And will give user the option to change some of the
+input parameters and see what the impact will be on the performance of the Random Forest model.
+
+## 1. Read the data
+```{r}
+wle = read.csv("pml-training.csv", stringsAsFactors = FALSE)
+dim(wle)
+```
+## 2. load library
+```{r results='hide', message=FALSE, warning=FALSE}
+library(caret)
+library(ggplot2)
+library(foreach)
+library(randomForest)
+```
+
+Prediction Accuracy
+========================================================
+
+
+```{r, echo=FALSE}
+features = colnames(wle)
+  mv = rep(NA,ncol(wle))
+  for (i in 1:ncol(wle)) {
+    nan = sum(is.na(wle[,i]) | wle[,i]=='' | wle[,i]==' ')
+    mv[i] = nan/nrow(wle)
+  }
+  names(mv) = features  # match the header with the missing value percentage
+  to_drop = names(mv[mv>0.9]) # will remove the features with more than 90% missing value
+  ind = match(to_drop, features)  
+  wle_new = wle[,-ind]
+  
+  ### Remove the unnecessary features
+  wle_new = wle_new[,7:60]
+ 
+   ### correlation analasis
+  corr.matrix = cor(wle_new[, 1:53], use = "pairwise.complete.obs")
+  corr.matrix[is.na(corr.matrix)] = 0
+  corr_features = foreach(i = 1:nrow(corr.matrix))  %do% {
+    rownames(corr.matrix[corr.matrix[,i] > 0.9,])
+  }
+  corr_features = corr_features[sapply(corr_features, function(x) length(x) > 0 )] ## remove empty rows
+  corr_features = unique(corr_features) ## remove duplicates
+  # create new features
+  new_gyro = wle_new$gyros_dumbbell_z * wle_new$gyros_forearm_z
+  new_belt = wle_new$total_accel_belt - wle_new$accel_belt_y - wle_new$roll_belt
+  wle_new$new_gyro = new_gyro
+  wle_new$new_belt = new_belt
+  # remove some features
+  cor_f = c(corr_features[[1]], corr_features[[2]])
+  cor_ind = match(cor_f, colnames(wle_new))
+  wle_new = wle_new[,-cor_ind]
+  # Split the data
+  training = wle_new
+  training$classe = as.factor(training$classe)
+  set.seed(12345)
+  inTrain = createDataPartition(y = training$classe, p=0.5, list = FALSE)
+  training = training[inTrain,]
+  inTrain = createDataPartition(y = training$classe, p=0.5, list = FALSE)
+  training = training[inTrain,]
+  inTrain = createDataPartition(y = training$classe, p=0.5, list = FALSE)
+  training_train = training[inTrain,]
+  training_cv = training[-inTrain,]
+  rf_fit = randomForest(classe ~., data = training_train, ntree=50, mtry=10, nodesize = 5)
+  OOB_Error = mean(rf_fit$err.rate)
+  pred_rf = predict(rf_fit, newdata = training_cv, type = 'response')
+  Pred_Acuracy = sum(diag(table(prediction = pred_rf, actual = training_cv$classe)))/length(training_cv$classe)
+```
+
+```{r, echo=FALSE, comment='', label=FALSE}
+paste(" The OOB error rate on the Training set is ", OOB_Error, "so the Prediction Accuracy is: ", 1-OOB_Error)
+
+paste("Prediction Accuracy on the CV set is ", Pred_Acuracy)
+```
+
+Confusion Matrix Plot
+========================================================
+
+```{r, echo=FALSE}
+## Confustion matrix
+confusion = rf_fit$confusion
+TClass <- factor(c(rep('A',5), rep('B',5), rep('C',5), rep('D', 5), rep('E', 5)))
+PClass <- factor(c(rep(LETTERS[1:5],5)))
+Y      <- c(confusion[5:1,1], confusion[5:1,2],confusion[5:1,3],confusion[5:1,4],confusion[5:1,5])
+df <- data.frame(TClass, PClass, Y)
+ggplot(data =  df, mapping = aes(x = TClass, y = PClass)) +
+  geom_tile(aes(fill = Y), colour = "white") +
+  geom_text(aes(label = sprintf("%1.0f", Y)), vjust = 1) +
+  scale_fill_gradient(low = "green", high = "orange") +
+  theme_bw() + theme(legend.position = "none") + 
+  ggtitle("Confustion Matrix for Random Forest") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  labs(x = 'True Activity', y = 'Predicted Activity')
+```
+
+Feature Importance Plot
+========================================================
+
+```{r, echo=FALSE}
+feat_importance = rf_fit$importance
+barchart(feat_importance)
+```
